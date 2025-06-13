@@ -1,7 +1,21 @@
-rich
+# Use PyTorch’s CUDA 11.8 wheels
+--extra-index-url https://download.pytorch.org/whl/cu118
+
+torch
+torchvision
+torchaudio
+
+# Core analysis libraries
 pandas
 scikit-learn
-pytest
+rich
 matplotlib
-sentence-transformers
+
+# FAISS for similarity search
 faiss-cpu
+
+# Sentence-Transformers for semantic embeddings
+sentence-transformers
+
+# Testing libraries
+pytest

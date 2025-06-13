@@ -10,6 +10,9 @@ INDEX_FILE = Path("code_index.faiss")
 META_FILE  = Path("code_meta.pkl")
 MODEL_NAME = "all-MiniLM-L6-v2"
 
+# Folders to skip entirely
+_SKIP_DIRS = {"venv", "__pycache__", ".pytest_cache", ".venv", ".git", ".github", "node_modules"}
+
 class SemanticCodeLinker:
     def __init__(
         self,
@@ -18,7 +21,7 @@ class SemanticCodeLinker:
     ):
         # device should be "cpu" or "cuda"
         self.model = SentenceTransformer(model_name, device=device)
-        self.index: Optional[faiss.Index] = None  # type: ignore
+        self.index: Optional[faiss.Index] = None
         self.metadata: List[Tuple[Path, int, str]] = []
 
     def build_index(
@@ -29,8 +32,8 @@ class SemanticCodeLinker:
         batch_size: int = 128
     ):
         """
-        Walk every file under code_dir, collect non-empty lines as snippets,
-        compute embeddings in batches (on the chosen device),
+        Walk every source file under `code_dir` (excluding skip dirs),
+        collect non-empty lines as snippets, encode them in batches,
         build & save a FAISS index + metadata.
         Calls progress_cb(percent) if provided after each batch.
         """
@@ -40,11 +43,20 @@ class SemanticCodeLinker:
                 self.metadata = pickle.load(f)
             return
 
-        snippets = []
-        meta = []
+        snippets: List[str] = []
+        meta: List[Tuple[Path, int, str]] = []
+
         for file in code_dir.rglob("*"):
-            if not file.is_file() or file.suffix.lower() not in {".py",".js",".java",".cpp",".cs",".ts"}:
+            if not file.is_file():
                 continue
+            # Skip any file inside unwanted directories
+            rel_parts = file.relative_to(code_dir).parts
+            if any(part in _SKIP_DIRS or part.startswith(".") for part in rel_parts):
+                continue
+
+            if file.suffix.lower() not in {".py", ".js", ".java", ".cpp", ".cs", ".ts"}:
+                continue
+
             for lineno, line in enumerate(file.open(errors="ignore"), start=1):
                 text = line.strip()
                 if text:
@@ -80,17 +92,18 @@ class SemanticCodeLinker:
         top_k: int = 5
     ) -> List[Tuple[Path, int, str, float]]:
         """
-        Encode `text` (on chosen device), search the index,
-        and return top_k matches as (file, lineno, snippet, distance).
+        Encode `text`, search the index, and return top_k matches as
+        (file, lineno, snippet, distance).
         """
         if self.index is None or not self.metadata:
             raise RuntimeError("Index not built yet. Call build_index() first.")
 
         emb = self.model.encode([text], convert_to_numpy=True)
         emb32 = np.array(emb, dtype="float32")
+
         distances, indices = self.index.search(emb32, top_k)  # type: ignore
 
-        results = []
+        results: List[Tuple[Path, int, str, float]] = []
         for dist, idx in zip(distances[0], indices[0]):
             file, lineno, snippet = self.metadata[idx]
             results.append((file, lineno, snippet, float(dist)))

@@ -7,6 +7,7 @@ from datetime import datetime
 # Define what constitutes a “problem” in your logs
 ERROR_PATTERNS = [
     r"\berror\b",
+    r"\bwarning\b",       # <-- now catches Warning: lines
     r"\bexception\b",
     r"\bfailed\b",
     r"\btimeout\b",

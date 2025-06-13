@@ -7,6 +7,9 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+
 # Ensure project root is in PYTHONPATH so that `import src` works
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -19,78 +22,57 @@ class LogAnalyzerGUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("AI Log Analyzer")
-        self.geometry("900x700")
+        self.geometry("900x800")
 
-        # Paths (set via file dialogs)
+        # Paths
         self.logs_dir: Path | None = None
         self.code_dir: Path | None = None
 
         # Threading queue for UI updates
         self._queue = queue.Queue()
 
-        # Wrap control variable (off by default for performance)
+        # Wrap control variable (off by default)
         self.wrap_var = tk.BooleanVar(value=False)
 
-        # Build UI
+        # Last anomalies & counts for plotting
+        self._last_anomalies = None
+        self._last_counts_df = None
+
         self.create_widgets()
         self.poll_queue()
 
     def create_widgets(self):
         # Directory selectors
-        tk.Label(self, text="Logs Directory:").pack(anchor="w", padx=10, pady=(10, 0))
+        tk.Label(self, text="Logs Directory:").pack(anchor="w", padx=10, pady=(10,0))
         tk.Button(self, text="Browse Logs...", command=self.select_logs_dir).pack(anchor="w", padx=10)
-
-        tk.Label(self, text="Codebase Directory:").pack(anchor="w", padx=10, pady=(10, 0))
+        tk.Label(self, text="Codebase Directory:").pack(anchor="w", padx=10, pady=(5,0))
         tk.Button(self, text="Browse Codebase...", command=self.select_code_dir).pack(anchor="w", padx=10)
 
-        # Controls: Analyze button, status, progress, wrap toggle
+        # Controls: Analyze, status, progress, wrap toggle
         control_frame = tk.Frame(self)
         control_frame.pack(fill="x", padx=10, pady=10)
-
-        self.analyze_button = tk.Button(
-            control_frame,
-            text="Analyze",
-            command=self.run_analysis,
-            bg="#4CAF50",
-            fg="white",
-        )
+        self.analyze_button = tk.Button(control_frame, text="Analyze", command=self.run_analysis, bg="#4CAF50", fg="white")
         self.analyze_button.pack(side="left")
-
         self.status_label = tk.Label(control_frame, text="Idle")
         self.status_label.pack(side="left", padx=10)
-
         self.progress = ttk.Progressbar(control_frame, mode="indeterminate")
-        self.progress.pack(side="left", fill="x", expand=True)
+        self.progress.pack(side="left", fill="x", expand=True, padx=(0,10))
+        wrap_check = tk.Checkbutton(control_frame, text="Word Wrap", variable=self.wrap_var,
+                                    command=self.toggle_wrap, bg="#1e1e1e", fg="#d4d4d4", selectcolor="#1e1e1e")
+        wrap_check.pack(side="left")
 
-        wrap_check = tk.Checkbutton(
-            control_frame,
-            text="Word Wrap",
-            variable=self.wrap_var,
-            command=self.toggle_wrap,
-            bg="#1e1e1e",
-            fg="#d4d4d4",
-            selectcolor="#1e1e1e",
-        )
-        wrap_check.pack(side="left", padx=10)
+        # Text output
+        self.output = ScrolledText(self, wrap=tk.NONE, bg="#1e1e1e", fg="#d4d4d4",
+                                   insertbackground="#d4d4d4", selectbackground="#264F78",
+                                   undo=False, maxundo=0)
+        self.output.pack(expand=True, fill="both", padx=10, pady=(0,10))
 
-        # ScrolledText with dark theme, initial wrap off
-        text_frame = tk.Frame(self)
-        text_frame.pack(expand=True, fill="both", padx=10, pady=10)
-
-        self.output = ScrolledText(
-            text_frame,
-            wrap=tk.NONE,
-            bg="#1e1e1e",
-            fg="#d4d4d4",
-            insertbackground="#d4d4d4",
-            selectbackground="#264F78",
-            undo=False,
-            maxundo=0
-        )
-        self.output.pack(side="left", expand=True, fill="both")
+        # Chart area
+        self.chart_frame = tk.Frame(self)
+        self.chart_frame.pack(fill="x", padx=10, pady=(0,10))
 
         # Configure color tags
-        self.output.tag_config('header', foreground='#569CD6', font=('TkDefaultFont', 12, 'bold'))
+        self.output.tag_config('header', foreground='#569CD6', font=('TkDefaultFont',12,'bold'))
         self.output.tag_config('count', foreground='#DCDCAA')
         self.output.tag_config('msg', foreground='#D4D4D4')
         self.output.tag_config('anomaly', foreground='#F44747')
@@ -123,6 +105,8 @@ class LogAnalyzerGUI(tk.Tk):
         self.status_label.config(text="Starting analysis...")
         self.progress.start(50)
         self.output.delete('1.0', tk.END)
+        for w in self.chart_frame.winfo_children():
+            w.destroy()
 
         threading.Thread(target=self._analysis_worker, daemon=True).start()
 
@@ -131,24 +115,31 @@ class LogAnalyzerGUI(tk.Tk):
         logs_dir = self.logs_dir
         code_dir = self.code_dir
 
+        # Phase 1: top problems
         self._queue.put(('status', 'Scanning logs for top problems...'))
-        all_counts: dict[str, int] = {}
+        all_counts = {}
         for log_file in find_log_files(logs_dir):
             counts = parse_file(log_file)
             merge_counts(all_counts, counts)
         top = top_n_problems(all_counts)
         self._queue.put(('top', top))
 
+        # Phase 2: anomalies
         self._queue.put(('status', 'Detecting anomalies...'))
-        timestamps: list = []
+        timestamps = []
         for log_file in find_log_files(logs_dir):
             timestamps += parse_file_with_timestamps(log_file)
-        anomalies_df = []
         if timestamps:
             counts_df = aggregate_counts_by_minute(timestamps)
             anomalies_df, _ = detect_anomalies(counts_df, contamination=0.05)
-        self._queue.put(('anomalies', anomalies_df))
+            self._last_anomalies = anomalies_df
+            self._last_counts_df = counts_df
+            self._queue.put(('anomalies', anomalies_df))
+            self._queue.put(('plot_data', counts_df))
+        else:
+            self._queue.put(('anomalies', []))
 
+        # Phase 3: code linking
         self._queue.put(('status', 'Linking errors to code...'))
         error_msgs = [err for err, _ in top]
         links = link_errors_to_code(error_msgs, code_dir)
@@ -171,6 +162,8 @@ class LogAnalyzerGUI(tk.Tk):
             self._display_anomalies(data)
         elif action == 'links':
             self._display_links(data)
+        elif action == 'plot_data':
+            self._show_plot(data)
         elif action == 'done':
             self._finish()
 
@@ -191,14 +184,35 @@ class LogAnalyzerGUI(tk.Tk):
 
     def _display_anomalies(self, anomalies_df):
         self.output.insert(tk.END, "\nAnomalous Time Windows:\n", 'header')
-        if not getattr(anomalies_df, 'empty', True):
+        if anomalies_df is not None and not anomalies_df.empty:
             for minute, row in anomalies_df.set_index('minute').iterrows():
                 self.output.insert(tk.END, " • ")
-                self.output.insert(tk.END, minute.strftime('%Y-%m-%d ') , 'date')
-                self.output.insert(tk.END, minute.strftime('%H:%M:%S ') , 'time')
+                self.output.insert(tk.END, minute.strftime('%Y-%m-%d '), 'date')
+                self.output.insert(tk.END, minute.strftime('%H:%M:%S '), 'time')
                 self.output.insert(tk.END, f"-> {row['count']} errors\n", 'anomaly')
         else:
             self.output.insert(tk.END, " None\n", 'msg')
+
+    def _show_plot(self, counts_df):
+        # Clear old chart
+        for w in self.chart_frame.winfo_children():
+            w.destroy()
+
+        fig, ax = plt.subplots(figsize=(8, 2), dpi=100)
+        ax.plot(counts_df['minute'], counts_df['count'], label='Error Count')
+        if self._last_anomalies is not None and not self._last_anomalies.empty:
+            ax.scatter(self._last_anomalies['minute'], self._last_anomalies['count'],
+                       color='red', label='Anomaly')
+        ax.set_title('Errors Over Time')
+        ax.set_ylabel('Count')
+        ax.set_xlabel('Time')
+        ax.legend()
+        fig.autofmt_xdate()
+        fig.tight_layout()  # ensure x-axis labels are fully visible
+
+        canvas = FigureCanvasTkAgg(fig, master=self.chart_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill="both", expand=True)
 
     def _display_links(self, links):
         self.output.insert(tk.END, "\nCode References for Top Errors:\n", 'header')

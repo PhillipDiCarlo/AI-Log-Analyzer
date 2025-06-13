@@ -2,3 +2,4 @@ rich
 pandas
 scikit-learn
 pytest
+matplotlib

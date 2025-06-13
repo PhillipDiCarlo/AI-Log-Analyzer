@@ -7,13 +7,9 @@ def extract_keywords(error: str, min_length: int = 3, max_keywords: int = 3) -> 
     """
     Extract the top `max_keywords` longest words from the error string as search terms.
     """
-    # Tokenize into alphanumeric words
     words = re.findall(r"\w+", error)
-    # Filter out short words
     keywords = [w for w in words if len(w) >= min_length]
-    # Sort descending by length
     keywords.sort(key=len, reverse=True)
-    # Return only the top N
     return keywords[:max_keywords]
 
 def find_code_matches(
@@ -30,19 +26,17 @@ def find_code_matches(
 
     matches: Dict[Path, List[str]] = defaultdict(list)
     for file in code_dir.rglob('*'):
-        if not file.is_file() or file.suffix.lower() not in file_extensions:
-            continue
-        try:
-            with file.open(errors='ignore') as f:
-                for lineno, line in enumerate(f, start=1):
-                    lower = line.lower()
-                    for kw in keywords:
-                        if kw.lower() in lower:
-                            matches[file].append(f"{lineno}: {line.strip()}")
-                            break
-        except Exception:
-            continue
-
+        if file.is_file() and file.suffix.lower() in file_extensions:
+            try:
+                with file.open(errors='ignore') as f:
+                    for lineno, line in enumerate(f, start=1):
+                        lower = line.lower()
+                        for kw in keywords:
+                            if kw.lower() in lower:
+                                matches[file].append(f"{lineno}: {line.strip()}")
+                                break
+            except Exception:
+                continue
     return matches
 
 def link_errors_to_code(
@@ -55,7 +49,7 @@ def link_errors_to_code(
     """
     error_map: Dict[str, Dict[Path, List[str]]] = {}
     for err in errors:
-        kws = extract_keywords(err)            # ['function', 'Error', 'bar']
+        kws = extract_keywords(err)
         matches = find_code_matches(kws, code_dir)
         error_map[err] = matches
     return error_map

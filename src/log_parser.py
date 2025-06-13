@@ -7,20 +7,18 @@ from datetime import datetime
 # Define what constitutes a “problem” in your logs
 ERROR_PATTERNS = [
     r"\berror\b",
-    r"\bwarning\b",       # <-- now catches Warning: lines
+    r"\bwarning\b",       # now catches Warning: lines
     r"\bexception\b",
     r"\bfailed\b",
     r"\btimeout\b",
     r"\bsegfault\b"
 ]
 
-# Regex for timestamps at the start of a line, e.g. "2025.06.13 01:23:38"
+# Regex for timestamps at the start of a line
 TS_PATTERN = re.compile(r"^(\d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2})")
 
 def is_problem(line: str) -> bool:
-    """
-    Return True if the line matches any of our error patterns.
-    """
+    """Return True if the line matches any of our error patterns."""
     return any(re.search(p, line, re.IGNORECASE) for p in ERROR_PATTERNS)
 
 def parse_file(log_path: Path) -> Dict[str, int]:
